@@ -1,56 +1,19 @@
-package main
+package hquery
 
 import (
 	"context"
-	"flag"
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
 
-func main() {
-	// Parse flags
-	url := flag.String("url", "", "url to get doc from")
-	file := flag.String("file", "", "url to get doc from")
-	query := flag.String("query", "", "doc html query")
-	attr := flag.String("attr", "", "html element attribute")
-
-	flag.Parse()
-	if *url == "" && *file == "" {
-		log.Fatal("url or file not provided")
-	}
-	if *query == "" {
-		log.Fatal("query not provided")
-	}
-
-	// Create signal based context
-	ctx, cancel := context.WithCancel(context.Background())
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, os.Kill)
-	go func() {
-		select {
-		case <-c:
-			cancel()
-		case <-ctx.Done():
-			cancel()
-		}
-		signal.Stop(c)
-	}()
-
-	// Run bot
-	if err := run(ctx, *file, *url, *query, *attr); err != nil {
-		log.Fatal(err)
-	}
-}
-
-func run(ctx context.Context, file, url, query, attr string) error {
+func Get(ctx context.Context, file, url, query, attr string) (string, error) {
 	client := &http.Client{
 		Timeout:   10 * time.Second,
 		Transport: &transport{},
@@ -61,27 +24,28 @@ func run(ctx context.Context, file, url, query, attr string) error {
 	case file != "":
 		f, err := os.Open(file)
 		if err != nil {
-			return fmt.Errorf("couldn't open file: %w", err)
+			return "", fmt.Errorf("hquery: couldn't open file: %w", err)
 		}
 		reader = f
 	case url != "":
 		r, err := client.Get(url)
 		if err != nil {
-			return fmt.Errorf("get request failed: %w", err)
+			return "", fmt.Errorf("hquery: get request failed: %w", err)
 		}
 		if r.StatusCode != 200 {
-			return fmt.Errorf("invalid status code: %s", r.Status)
+			return "", fmt.Errorf("hquery: invalid status code: %s", r.Status)
 		}
 		reader = r.Body
 		defer r.Body.Close()
 	default:
-		return fmt.Errorf("html source not provided")
+		return "", errors.New("hquery: html source not provided")
 	}
 
 	doc, err := goquery.NewDocumentFromReader(reader)
 	if err != nil {
-		return err
+		return "", fmt.Errorf("hquery: couldn't read document: %w", err)
 	}
+	var texts []string
 	doc.Find(query).Each(func(i int, s *goquery.Selection) {
 		text := s.Text()
 		if attr != "" {
@@ -89,10 +53,9 @@ func run(ctx context.Context, file, url, query, attr string) error {
 				text = val
 			}
 		}
-		text = strings.TrimSpace(text)
-		fmt.Println(text)
+		texts = append(texts, strings.TrimSpace(text))
 	})
-	return nil
+	return strings.Join(texts, "\n"), nil
 }
 
 type transport struct{}
